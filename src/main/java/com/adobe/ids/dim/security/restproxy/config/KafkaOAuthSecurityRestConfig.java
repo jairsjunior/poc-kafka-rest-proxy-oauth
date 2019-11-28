@@ -1,34 +1,57 @@
 package com.adobe.ids.dim.security.restproxy.config;
 
+import com.adobe.ids.dim.security.IMSBearerTokenJwt;
 import io.confluent.kafkarest.KafkaRestConfig;
 import io.confluent.rest.RestConfigException;
 import io.confluent.kafkarest.SystemTime;
 import org.apache.kafka.common.config.ConfigDef;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Optional;
 import java.util.Properties;
 
 public final class KafkaOAuthSecurityRestConfig extends KafkaRestConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(KafkaOAuthSecurityRestConfig.class);
     private static final ConfigDef configDef = createBaseConfigDef();
 
-    private final Optional<String> jwtToken;
-    private final String clientId = "";
-    private final String clientSecret = "";
-    private final String clientCode = "";
+    private IMSBearerTokenJwt jwtToken;
+    private String clientBootstrapServers;
 
-
-    public KafkaOAuthSecurityRestConfig(final Properties props, final Optional<String> jwtToken) throws RestConfigException {
+    public KafkaOAuthSecurityRestConfig(final Properties props, final IMSBearerTokenJwt jwtToken) throws RestConfigException {
         super(KafkaOAuthSecurityRestConfig.configDef, props, new SystemTime());
+        log.info("KafkaOAuthSecurityRestConfig -- Constructor ");
         this.jwtToken = jwtToken;
+        for(Object s : props.keySet()){
+            log.info("Propertie: " + s + " -- " + props.get(s));
+        }
+        this.clientBootstrapServers = props.getProperty("ims.rest.client.bootstrap.servers");
+        log.info("Client Bootstrap Server: " + this.clientBootstrapServers);
+        if(this.jwtToken != null){
+            log.info("JwtToken: ", jwtToken.toString());
+        }
     }
 
     public Properties getProducerProperties() {
+        log.info("KafkaOAuthSecurityRestConfig -- getProducerProperties ");
         final Properties originalProps = super.getProducerProperties();
         Properties secureProps = new Properties();
-        if (this.jwtToken.isPresent()) {
+        if (this.jwtToken != null) {
+            secureProps = this.getTokenClientProps();
+        }
+        originalProps.putAll(secureProps);
+        log.info("originalProps: ", originalProps.toString());
+        return originalProps;
+    }
+
+    public Properties getConsumerProperties() {
+        log.info("KafkaOAuthSecurityRestConfig -- getConsumerProperties ");
+        final Properties originalProps = super.getConsumerProperties();
+        Properties secureProps = new Properties();
+        if (this.jwtToken != null) {
+            log.info("----> JWT Token not null <----");
             secureProps = this.getTokenClientProps();
         }
         originalProps.putAll(secureProps);
@@ -37,14 +60,14 @@ public final class KafkaOAuthSecurityRestConfig extends KafkaRestConfig {
 
     public Properties getTokenClientProps(){
         final Properties properties = new Properties();
+        if(!this.clientBootstrapServers.isEmpty()){
+            properties.put("bootstrap.servers", this.clientBootstrapServers);
+        }
         properties.put("sasl.mechanism", "OAUTHBEARER");
-        properties.put("sasl.login.callback.handler.class", "com.adobe.ids.dim.security.IMSAuthenticateLoginCallbackHandler");
+        properties.put("security.protocol", "SASL_PLAINTEXT");
+        properties.put("sasl.login.callback.handler.class", "com.adobe.ids.dim.security.restproxy.IMSAuthenticateLoginCallbackHandler");
         properties.put("sasl.jaas.config", "org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required  " +
-                "ims.token.url=\"" + this.getString("ims.token.url")  + "\"" +
-                "ims.grant.type=\"authorization_code\" " +
-                "ims.client.id=\"" + clientId + "\"" +
-                "ims.client.secret=\"" + clientSecret + "\"" +
-                "ims.client.code=\"" + clientCode + "\";");
+                "ims.client.code=\"" + this.jwtToken.value() + "\";");
         return properties;
     }
 
@@ -76,7 +99,15 @@ public final class KafkaOAuthSecurityRestConfig extends KafkaRestConfig {
                         (Object) Collections.singletonList("DEFAULT"),
                         ConfigDef.Importance.LOW,
                         "A list of rules to map from the distinguished name (DN) in the client certificate to a short name principal for authentication with the Kafka broker. Rules are tested from left to right. The first rule that matches will be applied."
-                );
+                )
+                .define(
+                        "ims.rest.client.bootstrap.servers",
+                        ConfigDef.Type.STRING,
+                        (Object)"",
+                        ConfigDef.Importance.LOW,
+                        "Comma separeted list of bootstrap servers and ports that have OAUTHBEARER SASL_PLAINTEXT configured"
+                )
+                ;
     }
 
 
@@ -84,6 +115,6 @@ public final class KafkaOAuthSecurityRestConfig extends KafkaRestConfig {
         ArrayList<String> validNames = new ArrayList<String>();
         validNames.add("OAuth");
         validNames.add("");
-        return (String[])validNames.toArray();
+        return validNames.toArray(new String[0]);
     }
 }
